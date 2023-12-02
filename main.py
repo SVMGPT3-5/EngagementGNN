@@ -102,8 +102,8 @@ def select_params(Model_type, X_train, y_train, X_test, y_test, df, g, num_class
         learning_rate = 0.025
         subsample = 0.85
         colsample_bytree = 0.35
-        eval_metric = 'rmse'
-        objective = 'reg:squarederror'
+        eval_metric = 'logloss'
+        objective = 'binary:logistic'
         tree_method = 'gpu_hist'
         seed = 1
         model = create_XGB(max_depth, learning_rate, subsample,
@@ -124,7 +124,7 @@ def main(LOAD_CSV=False, EXTRACT_BERT=True, USE_PCA=False, USER_FEAT=True, BERT_
     print("COMPONENTS:", nx.number_connected_components(g))
     if not LOAD_CSV:
         df = pd.read_csv("/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv", lineterminator="\n")
-        df=df.iloc[:1000,:]
+        df=df.iloc[:100000,:]
         df["class"] = df["engagement"].apply(lambda x: eng_class(x))
         df = df.groupby('class').apply(sampling_k_elements).reset_index(drop=True)
         if EXTRACT_BERT:
@@ -140,7 +140,7 @@ def main(LOAD_CSV=False, EXTRACT_BERT=True, USE_PCA=False, USER_FEAT=True, BERT_
         df = normalize(df)
     else:
         df = pd.read_csv("/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv")
-        df=df.iloc[:1000,:]
+        df=df.iloc[:100000,:]
         if USER_FEAT and not BERT_FEAT:
             df = df.iloc[:, 0:11]
         if not USER_FEAT and BERT_FEAT:

@@ -33,7 +33,7 @@ def edges_subset(split_df, delta=15):
 
 # LOAD DATA
 df = pd.read_csv(path_to_tweets, lineterminator='\n')
-df=df.iloc[:10000,:]
+df=df.iloc[:100000,:]
 df["hashtag"] = df["hashtag"].apply(lambda x: list(set(ast.literal_eval(x))))
 df["time"] = pd.to_datetime(df["time"])
 
