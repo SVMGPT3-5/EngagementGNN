@@ -1,6 +1,7 @@
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 import gc
+import pickle
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from Training import run_experiment, run_experiment_XGB
@@ -17,6 +18,8 @@ from models.GAT import create_GAT
 from models.GCN import create_GCN
 from models.MLP import create_MLP
 import argparse
+import os
+import tensorflow as tf
 
 
 def parse_args():
@@ -112,12 +115,15 @@ def select_params(Model_type, X_train, y_train, X_test, y_test, df, g, num_class
 
 def main(LOAD_CSV=False, EXTRACT_BERT=True, USE_PCA=False, USER_FEAT=True, BERT_FEAT=True, Model_Type='GCN'):
     reset_random_seeds()
-    g = nx.read_gpickle('./network_tweets.pickle')
+    graph = nx.path_graph(4)
+    with open("network_tweets.pickle", "rb") as f:
+      g = pickle.load(f)
+    # g = nx.read_gpickle('./network_tweets.pickle')
     print("POST:", len(g.nodes))
     print("ARCS:", len(g.edges))
     print("COMPONENTS:", nx.number_connected_components(g))
     if not LOAD_CSV:
-        df = pd.read_csv("./first_week.csv", lineterminator="\n")
+        df = pd.read_csv("/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv", lineterminator="\n")
         df["class"] = df["engagement"].apply(lambda x: eng_class(x))
         df = df.groupby('class').apply(sampling_k_elements).reset_index(drop=True)
         if EXTRACT_BERT:
@@ -132,7 +138,8 @@ def main(LOAD_CSV=False, EXTRACT_BERT=True, USE_PCA=False, USER_FEAT=True, BERT_
             gc.collect()
         df = normalize(df)
     else:
-        df = pd.read_csv("./first_week_posts_bert.csv")
+        df = pd.read_csv("/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv")
+        df=df.iloc[:1000,:]
         if USER_FEAT and not BERT_FEAT:
             df = df.iloc[:, 0:11]
         if not USER_FEAT and BERT_FEAT:
