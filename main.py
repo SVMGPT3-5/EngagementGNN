@@ -1,71 +1,186 @@
 import pandas as pd
-import ast
-import networkx as nx
-import datetime
-from joblib import Parallel, delayed
-from tqdm.auto import tqdm
-import numpy as np
-
+from sentence_transformers import SentenceTransformer
+import gc
 import pickle
-
-# settings (define the path to the tweets dataset)
-delta = 2880
-path_to_tweets = "/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv"
-n_jobs = 8
-
-'''
-Function to compute the edges on a slice of the tweets dataframe.
-Returns the corresponding list of edges
-'''
-
-
-def edges_subset(split_df, delta=15):
-    # filter by time
-    edges = []
-    for _, post in split_df.iterrows():
-        sub_df = df.loc[((df["time"]) > post["time"] - datetime.timedelta(minutes=delta)) &
-                        (df["time"] < post["time"])].copy(deep=True)
-        sub_df["connected"] = sub_df["hashtag"].apply(lambda x: len(set(x).intersection(post["hashtag"])))
-        sub_df = sub_df.loc[sub_df["connected"] > 0]
-        edges = edges + [(row["id"], post["id"], row["connected"]) for _, row in sub_df.iterrows()]
-    return edges
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
+from Training import run_experiment, run_experiment_XGB
+from Evaluation import evaluate, evaluate_XGB
+from utils import normalize, eng_class, sampling_k_elements, extract_graph
+import numpy as np
+import networkx as nx
+from tensorflow import keras
+from keras.utils import to_categorical
+import random
+from models.Xgboost import create_XGB
+from models.Conv1D import create_Conv1D
+from models.GAT import create_GAT
+from models.GCN import create_GCN
+from models.MLP import create_MLP
+import argparse
+import os
+import tensorflow as tf
 
 
-# LOAD DATA
-df = pd.read_csv(path_to_tweets, lineterminator='\n')
-df=df.iloc[:10000,:]
-df["hashtag"] = df["hashtag"].apply(lambda x: list(set(ast.literal_eval(x))))
-df["time"] = pd.to_datetime(df["time"])
-
-# COMPUTE EDGES using Parallel jobs. It works on dataframe splits
-all_edges = Parallel(n_jobs=n_jobs)(delayed(edges_subset)(split_df, delta=delta) for split_df in tqdm(np.array_split(df, 100)))
-all_edges = [y for x in all_edges for y in x]
-
-# CREATE GRAPH
-graph = nx.Graph()
-# add weighted edges
-graph.add_weighted_edges_from(all_edges)
-# add isolated nodes
-isolated = set(df["id"]).difference(list(graph.nodes))
-graph.add_nodes_from(isolated)
-# add node attributes
-nx.set_node_attributes(graph, df.loc[df["id"].isin(list(graph.nodes))].set_index("id").to_dict(orient="index"))
-print("NODES:", len(graph.nodes))
-print("EDGES:", len(graph.edges))
-print("DENSITY:", nx.density(graph))
-print("NUM CONNECTED COMPONENTS:", len([len(c) for c in sorted(nx.connected_components(graph), key=len, reverse=True)]))
-print("MAX CONNECTED COMPONENT:", max([len(c) for c in sorted(nx.connected_components(graph), key=len, reverse=True)]))
-
-# check
-if "/" in path_to_tweets:
-    filename = path_to_tweets.split("/")[-1].split(".")[0]
-else:
-    filename = path_to_tweets.split("\\")[-1].split(".")[0]
+def parse_args():
+    parser = argparse.ArgumentParser("TweetGage Params")
+    a = parser.add_argument
+    a('--LOAD_CSV', action='store_true')
+    a('--EXTRACT_BERT', action='store_true')
+    a('--USE_PCA', action='store_true')
+    a('--USER_FEAT', action='store_true')
+    a('--BERT_FEAT', action='store_true')
+    a('--Model_Type', default='GCN', type=str)
+    return parser.parse_args()
 
 
-# protocol=4 ensures compatibility with older Python versions
-# nx.write_gpickle(graph, "network_tweets.pickle", protocol=4)
+def reset_random_seeds():
+    os.environ['PYTHONHASHSEED'] = str(2)
+    tf.random.set_seed(2)
+    np.random.seed(2)
+    random.seed(2)
 
-# Writing the graph to a file using pickle
-with open("network_tweets_10000.pickle", "wb") as f:
-  pickle.dump(graph, f, protocol=4)
+
+def select_params(Model_type, X_train, y_train, X_test, y_test, df, g, num_classes=2, num_epochs=300):
+    num_classes = num_classes
+    num_epochs = num_epochs
+    dropout_rate = None
+    num_layers = None
+    num_heads = None
+    if Model_type == 'GCN':
+        hidden_units = [16]
+        dropout_rate = 0.3
+        learning_rate = 0.1
+        batch_size = 256
+        input = np.array(X_train.index)
+        target = to_categorical(y_train)
+        loss = keras.losses.CategoricalCrossentropy
+        optimizer = keras.optimizers.Adam
+        input_test = np.array(X_test.index)
+        target_test = y_test
+        graph_info = extract_graph(g, df)
+        model = create_GCN(graph_info, num_classes, hidden_units, dropout_rate)
+    if Model_type == 'MLP':
+        hidden_units = [32, 32]
+        learning_rate = 0.01
+        dropout_rate = 0.5
+        batch_size = 256
+        loss = keras.losses.CategoricalCrossentropy
+        input = X_train
+        target = to_categorical(y_train)
+        input_test = X_test
+        target_test = y_test
+        optimizer = keras.optimizers.Adam
+        model = create_MLP(X_train.shape[1], hidden_units, num_classes, dropout_rate)
+    if Model_type == 'Conv1D':
+        hidden_units = 64
+        learning_rate = 0.1
+        batch_size = 256
+        model = create_Conv1D(num_classes, hidden_units, X_train.shape[1])
+        input = X_train.values.reshape(-1, X_train.shape[1], 1)
+        loss = keras.losses.CategoricalCrossentropy
+        target = to_categorical(y_train)
+        optimizer = keras.optimizers.Adam
+        input_test = X_test
+        target_test = y_test
+    if Model_type == 'GAT':
+        hidden_units = 100
+        num_heads = 2
+        num_layers = 1
+        batch_size = 64
+        learning_rate = 1e-2
+        graph_info = extract_graph(g, df)
+        input = np.array(X_train.index)
+        target = to_categorical(y_train)
+        model = create_GAT(graph_info[0], graph_info[1].T, hidden_units, num_heads, num_layers, num_classes)
+        loss = keras.losses.CategoricalCrossentropy
+        optimizer = keras.optimizers.SGD
+        input_test = np.array(X_test.index)
+        target_test = y_test
+    if Model_type == 'XGBOOST':
+        max_depth = 8
+        learning_rate = 0.025
+        subsample = 0.85
+        colsample_bytree = 0.35
+        eval_metric = 'rmse'
+        objective = 'reg:squarederror'
+        tree_method = 'gpu_hist'
+        seed = 1
+        model = create_XGB(max_depth, learning_rate, subsample,
+                           colsample_bytree, eval_metric, objective,
+                           tree_method, seed)
+        return model
+    return hidden_units, num_classes, learning_rate, num_epochs, dropout_rate, batch_size, num_layers, num_heads, input, target, loss, optimizer, input_test, target_test, model
+
+
+def main(LOAD_CSV=False, EXTRACT_BERT=True, USE_PCA=False, USER_FEAT=True, BERT_FEAT=True, Model_Type='GCN'):
+    reset_random_seeds()
+    graph = nx.path_graph(4)
+    with open("network_tweets.pickle", "rb") as f:
+      g = pickle.load(f)
+    # g = nx.read_gpickle('./network_tweets.pickle')
+    print("POST:", len(g.nodes))
+    print("ARCS:", len(g.edges))
+    print("COMPONENTS:", nx.number_connected_components(g))
+    if not LOAD_CSV:
+        df = pd.read_csv("/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv", lineterminator="\n")
+        df=df.iloc[:1000,:]
+        df["class"] = df["engagement"].apply(lambda x: eng_class(x))
+        df = df.groupby('class').apply(sampling_k_elements).reset_index(drop=True)
+        if EXTRACT_BERT:
+            model = SentenceTransformer('efederici/sentence-bert-base')
+            emb = model.encode(df["text"])
+            if USE_PCA:
+                pca = PCA(n_components=48)
+                pca.fit(emb)
+                emb = pca.transform(emb)
+            df = pd.concat([df, pd.DataFrame(emb)], axis=1)
+            del emb, model
+            gc.collect()
+        df = normalize(df)
+    else:
+        df = pd.read_csv("/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv")
+        df=df.iloc[:1000,:]
+        if USER_FEAT and not BERT_FEAT:
+            df = df.iloc[:, 0:11]
+        if not USER_FEAT and BERT_FEAT:
+            df = df.iloc[:, 10:]
+        if USE_PCA:
+            pca = PCA(n_components=48)
+            print('PCA 48 Components')
+            pca.fit(df.drop(["class"], axis=1))
+            emb = pca.transform(df.drop(["class"], axis=1))
+            df = pd.concat([pd.DataFrame(emb), df[["class"]]], axis=1)
+
+    X_train, X_test, y_train, y_test = train_test_split(df.drop(["class"], axis=1), df["class"], test_size=0.2,
+                                                        random_state=42, stratify=df["class"])
+    if not Model_Type == 'XGBOOST':
+        hidden_units, num_classes, learning_rate, num_epochs, dropout_rate, batch_size, num_layers, \
+        num_heads, input, target, loss, optimizer, input_test, target_test, model = select_params(Model_Type, X_train,
+                                                                                                  y_train, X_test,
+                                                                                                  y_test,
+                                                                                                  df,
+                                                                                                  g,
+                                                                                                  num_epochs=300)
+        run_experiment(model, input, target, learning_rate, loss, num_epochs, batch_size, optimizer)
+        evaluate(model, input_test, target_test)
+    else:
+        model = select_params(Model_Type, X_train, y_train, X_test, y_test, df, g,
+                              num_epochs=300)
+        obj = run_experiment_XGB(model, X_train, y_train)
+        evaluate_XGB(obj, X_test, y_test)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="TweetGage Params")
+    parser.add_argument('--LOAD_CSV', type=bool, default=False, help='Description for LOAD_CSV')
+    parser.add_argument('--EXTRACT_BERT', type=bool, default=True, help='Description for EXTRACT_BERT')
+    parser.add_argument('--USE_PCA', type=bool, default=False, help='Description for USE_PCA')
+    parser.add_argument('--USER_FEAT', type=bool, default=True, help='Description for USER_FEAT')
+    parser.add_argument('--BERT_FEAT', type=bool, default=False, help='Description for BERT_FEAT')
+    parser.add_argument('--Model_Type', type=str, default='GCN', help='Description for Model_Type')
+
+    return parser.parse_args()
+
+if __name__ == '__main__':
+    args = vars(parse_args())
+    main(**args)

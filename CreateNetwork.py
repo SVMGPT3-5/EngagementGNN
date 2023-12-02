@@ -10,7 +10,7 @@ import pickle
 
 # settings (define the path to the tweets dataset)
 delta = 2880
-path_to_tweets = "/content/drive/My Drive/Datasets/Hashtags_df_GNN_v2.csv"
+path_to_tweets = "/content/drive/MyDrive/DatasetsHashtags&Engagement_df_GNN.csv"
 n_jobs = 8
 
 '''
@@ -33,7 +33,7 @@ def edges_subset(split_df, delta=15):
 
 # LOAD DATA
 df = pd.read_csv(path_to_tweets, lineterminator='\n')
-df=df.iloc[:1000,:]
+df=df.iloc[:10000,:]
 df["hashtag"] = df["hashtag"].apply(lambda x: list(set(ast.literal_eval(x))))
 df["time"] = pd.to_datetime(df["time"])
 
@@ -65,8 +65,7 @@ else:
 
 # protocol=4 ensures compatibility with older Python versions
 # nx.write_gpickle(graph, "network_tweets.pickle", protocol=4)
-graph = nx.path_graph(4)
 
 # Writing the graph to a file using pickle
-with open("network_tweets.pickle", "wb") as f:
+with open("network_tweets_10000.pickle", "wb") as f:
   pickle.dump(graph, f, protocol=4)
