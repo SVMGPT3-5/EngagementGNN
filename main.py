@@ -99,8 +99,8 @@ def select_params(Model_type, X_train, y_train, X_test, y_test, df, g, num_class
         learning_rate = 0.025
         subsample = 0.85
         colsample_bytree = 0.35
-        eval_metric = 'logloss'
-        objective = 'binary:logistic'
+        eval_metric = 'rmse'
+        objective = 'reg:squarederror'
         tree_method = 'gpu_hist'
         seed = 1
         model = create_XGB(max_depth, learning_rate, subsample,

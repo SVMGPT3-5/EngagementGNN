@@ -6,7 +6,7 @@ import networkx as nx
 
 
 def eng_class(x):
-    if x <= 0:
+    if x <= 5:
         return 0
     else:
         return 1
